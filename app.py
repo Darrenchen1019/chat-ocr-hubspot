@@ -34,21 +34,53 @@ def baidu_ocr(image_path, api_key, secret_key):
     result = requests.post(ocr_url, headers=headers, data=data).json()
     return [item["words"] for item in result.get("words_result", [])]
 
-# ====== 信息提取函数 ======
+# ====== 信息提取优化版 ======
 def extract_info(text_lines):
-    text = "\n".join(text_lines)
-    # 简单正则示例，可根据实际优化
-    contact = re.search(r"(联系人|Contact|Name)[:：]?\s*([^\n，, ]+)", text)
-    phone = re.search(r"(电话|Phone)[:：]?\s*([0-9+\-\s]+)", text)
-    country = re.search(r"(国家|Country)[:：]?\s*([^\n，, ]+)", text)
-    product = re.findall(r"(产品型号|Product Model|Model)[:：]?\s*([^\n，, ]+)", text)
-    demand = re.search(r"(需求|requirement|need|looking for)[:：]?\s*([^\n]+)", text, re.I)
+    # 1. 过滤无关内容
+    filtered = []
+    for line in text_lines:
+        line = line.strip()
+        if not line or re.match(r'^\d{4}年|\d{2}:\d{2}', line):  # 时间戳
+            continue
+        if '已成为联系人' in line or '端到端加密' in line or '发送消息' in line:
+            continue
+        if line.startswith('XINHUI') or line.startswith('NEW ARRIVAL'):
+            continue
+        filtered.append(line)
+
+    # 2. 联系人提取（优先顶部昵称，其次自我介绍）
+    contact = ""
+    if filtered:
+        # 顶部昵称一般在第一行
+        if re.match(r'^[A-Za-z0-9\.\s]+$', filtered[0]) and len(filtered[0]) < 30:
+            contact = filtered[0].strip()
+    if not contact:
+        # 查找自我介绍
+        for line in filtered:
+            m = re.search(r'(?:is|I am|this is|me)\s*([A-Za-z0-9\. ]+)', line, re.I)
+            if m:
+                contact = m.group(1).strip()
+                break
+
+    # 3. 需求提取（客户主动表达的内容，合并为一句）
+    # 只保留客户发的英文内容，去掉自己回复
+    demand_keywords = [
+        "door bell", "send me", "so i can pay", "you send", "need", "require", "looking for", "order", "quote", "price"
+    ]
+    demand_lines = []
+    for line in filtered:
+        l = line.lower()
+        if any(kw in l for kw in demand_keywords) or l in ["hi"]:
+            demand_lines.append(line)
+    demand = ", ".join(demand_lines)
+
+    # 其它字段如无则留空
     return {
-        "联系人": contact.group(2) if contact else "",
-        "电话": phone.group(2) if phone else "",
-        "国家": country.group(2) if country else "",
-        "产品型号": "，".join([p[1] for p in product]) if product else "",
-        "需求": demand.group(2) if demand else ""
+        "联系人": contact,
+        "电话": "",
+        "国家": "",
+        "产品型号": "",
+        "需求": demand
     }
 
 # ====== HubSpot同步函数（联系人+备注）======
@@ -59,7 +91,6 @@ def sync_to_hubspot(contact, phone, country, product, demand, raw_text):
         "Authorization": f"Bearer {HUBSPOT_TOKEN}",
         "Content-Type": "application/json"
     }
-    # 这里只用联系人和电话做唯一性判断，实际可根据业务调整
     data = {
         "properties": {
             "firstname": contact,
@@ -69,7 +100,6 @@ def sync_to_hubspot(contact, phone, country, product, demand, raw_text):
             "需求": demand
         }
     }
-    # 创建联系人
     resp = requests.post(url, headers=headers, json=data)
     if resp.status_code == 201:
         contact_id = resp.json()["id"]
