@@ -40,41 +40,39 @@ def extract_info(text_lines):
     filtered = []
     for line in text_lines:
         line = line.strip()
-        if not line or re.match(r'^\d{4}年|\d{2}:\d{2}', line):  # 时间戳
+        # 过滤空行、时间、系统提示、中文、特殊符号
+        if not line or re.match(r'^\d{4}年|\d{2}:\d{2}', line):
             continue
-        if '已成为联系人' in line or '端到端加密' in line or '发送消息' in line:
+        if any(x in line for x in ['已成为联系人', '端到端加密', '发送消息', '了解更多', '你', '发送消息']):
             continue
-        if line.startswith('XINHUI') or line.startswith('NEW ARRIVAL'):
+        if re.search(r'[\u4e00-\u9fff]', line):  # 有中文
             continue
         filtered.append(line)
 
     # 2. 联系人提取（优先顶部昵称，其次自我介绍）
     contact = ""
-    if filtered:
-        # 顶部昵称一般在第一行
-        if re.match(r'^[A-Za-z0-9\.\s]+$', filtered[0]) and len(filtered[0]) < 30:
-            contact = filtered[0].strip()
+    # 取前10行最长的英文名
+    candidates = [l for l in filtered[:10] if re.match(r'^[A-Za-z0-9\.\s]+$', l) and len(l) > 2]
+    if candidates:
+        contact = max(candidates, key=len)
     if not contact:
-        # 查找自我介绍
         for line in filtered:
             m = re.search(r'(?:is|I am|this is|me)\s*([A-Za-z0-9\. ]+)', line, re.I)
             if m:
                 contact = m.group(1).strip()
                 break
 
-    # 3. 需求提取（客户主动表达的内容，合并为一句）
-    # 只保留客户发的英文内容，去掉自己回复
-    demand_keywords = [
-        "door bell", "send me", "so i can pay", "you send", "need", "require", "looking for", "order", "quote", "price"
-    ]
+    # 3. 需求提取（只保留客户发的英文内容，合并为一句）
+    # 假设你自己的回复一般是“I am xxx”、“OK”、“Just back to home...”等
+    my_reply_keywords = ['I am', 'OK', 'Just back', '你']
     demand_lines = []
     for line in filtered:
-        l = line.lower()
-        if any(kw in l for kw in demand_keywords) or l in ["hi"]:
+        if any(k in line for k in my_reply_keywords):
+            continue
+        if re.match(r'^[A-Za-z0-9 ,\.\'\/]+$', line) and len(line) > 1:
             demand_lines.append(line)
     demand = ", ".join(demand_lines)
 
-    # 其它字段如无则留空
     return {
         "联系人": contact,
         "电话": "",
